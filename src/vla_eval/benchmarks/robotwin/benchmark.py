@@ -493,6 +493,7 @@ class RoboTwinBenchmark(StepBenchmark):
         _restore_play_once_attributes(self._env, self.task_name)
         self._env.set_instruction(instruction=task["instruction"])
         self._steps = 0
+        self._cur_ids = (self.task_name, task["seed"])  # P2 state sidecar key (seed 唯一；episode_idx 常缺省 0)
         raw_obs = self._env.get_obs()
         self._recorder.record_video(self._extract_frame(raw_obs))
         return raw_obs
@@ -515,6 +516,7 @@ class RoboTwinBenchmark(StepBenchmark):
         raw_obs = self._env.get_obs() if done or self._steps % self.render_every == 0 else None
         self._recorder.record_video(self._extract_frame(raw_obs))
         self._recorder.record_step(reward=1.0 if success else 0.0, done=done, success=success)
+        self._dump_state_snapshot(raw_obs, success)
         return StepResult(obs=raw_obs, reward=1.0 if success else 0.0, done=done, info={"success": success})
 
     @staticmethod
@@ -570,3 +572,34 @@ class RoboTwinBenchmark(StepBenchmark):
             "state": STATE_JOINT,
             "language": LANGUAGE,
         }
+
+    def _dump_state_snapshot(self, raw_obs: Any, success: bool) -> None:
+        """P2 instrumentation (partner-vla-eval): per-step overwrite sidecar.
+
+        Writes /work/results/rw-state-<task>-s<SEED>.json every step; the file left
+        behind IS the final state (timeouts included). Joints always; cup/coaster
+        functional points on a best-effort basis (place_empty_cup et al).
+        Never breaks the eval path.
+        """
+        try:
+            import json as _json
+            import os as _os
+            import numpy as _np
+            joints = [round(float(x), 4) for x in _np.asarray(raw_obs["joint_action"]["vector"]).flatten()]
+            objs: dict = {}
+            for _oname in ("cup", "coaster", "roller", "bottle", "phone_stand"):
+                try:
+                    _o = getattr(self._env, _oname, None)
+                    if _o is None:
+                        continue
+                    _p = _o.get_functional_point(0, "pose").p
+                    objs[_oname] = [round(float(x), 4) for x in _p]
+                except Exception:
+                    continue
+            tname, ep = getattr(self, "_cur_ids", ("?", "?"))
+            _os.makedirs("/work/results", exist_ok=True)
+            with open(f"/work/results/rw-state-{tname}-s{ep}.json", "w") as fh:
+                _json.dump({"task": tname, "episode_idx": ep, "success_so_far": bool(success),
+                            "joints14": joints, "objects": objs}, fh)
+        except Exception:
+            pass
