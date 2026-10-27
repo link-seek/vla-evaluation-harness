@@ -108,6 +108,9 @@ echo "Launching ${NUM_SHARDS} shards..."
 set -m  # each shard leads its own process group, so cleanup() can signal its whole tree
 for i in $(seq 0 $((NUM_SHARDS - 1))); do
   # </dev/null: with -m, background jobs keep terminal stdin; a shard reading it would stop on SIGTTIN
+  # 错峰启动：各 shard 首集并行做 CuRobo/warp 内核编译会撞缓存（V100 上 error code 6，约半数 shard 起不来）；
+  # 启动窗口约十几秒，45s 间隔错开它（总时长 +~6min，可接受）。
+  [ "$i" -gt 0 ] && sleep 45
   vla-eval run "${RUN_OPTS[@]}" --shard-id "$i" --num-shards "$NUM_SHARDS" </dev/null &
   pids+=($!)
 done
