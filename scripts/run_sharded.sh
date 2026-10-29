@@ -106,8 +106,15 @@ fi
 
 echo "Launching ${NUM_SHARDS} shards..."
 set -m  # each shard leads its own process group, so cleanup() can signal its whole tree
+# warp JIT kernel cache base, resolved once: per-shard subdirs below isolate
+# concurrent nvcc writes (shared cache collides on V100: "CUDA kernel build
+# failed with error code 6", ~half the shards die at startup).
+# Honors $WARP_CACHE_PATH as base when set, else ~/.cache/warp.
+_WARP_CACHE_BASE="${WARP_CACHE_BASE:-${WARP_CACHE_PATH:-${HOME:-/root}/.cache/warp}}"
 for i in $(seq 0 $((NUM_SHARDS - 1))); do
   # </dev/null: with -m, background jobs keep terminal stdin; a shard reading it would stop on SIGTTIN
+  export WARP_CACHE_PATH="$_WARP_CACHE_BASE/shard-$i"
+  mkdir -p "$WARP_CACHE_PATH"
   vla-eval run "${RUN_OPTS[@]}" --shard-id "$i" --num-shards "$NUM_SHARDS" </dev/null &
   pids+=($!)
 done
